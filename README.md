@@ -18,18 +18,6 @@
 
 ---
 
-##  Dataset Preview
-
-| HEX Code | RGB | Sample Concept |
-| :--- | :--- | :--- |
-| `#FF5733` | `rgb(255, 87, 51)` | Micro-step Shift A |
-| `#FF5734` | `rgb(255, 87, 52)` | Micro-step Shift B |
-| `#FF5735` | `rgb(255, 87, 53)` | Micro-step Shift C |
-
-*(...and 49,997 more precision-crafted shades inside)*
-
----
-
 ##  License & Sharing
 
 Under the **MIT License**, you can share these 50,000 colors on any platform of your choice simply by using my GitHub username (`kocatepedemir`) or project link.
