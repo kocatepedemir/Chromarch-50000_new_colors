@@ -1,4 +1,4 @@
-# 🎨 Chromarch — 50,000 New Colors
+# Chromarch — 50,000 New Colors
 
 <p align="center">
   <img src="https://img.shields.io/badge/Colors-50%2C000-brightgreen?style=for-the-badge&logo=color&logoColor=white" alt="50k Colors">
@@ -10,15 +10,15 @@
 
 ---
 
-## ⚡ Why Chromarch?
+## Why Chromarch?
 
-- 🎯 **Micro-Nuanced Variations:** Tiny HEX-level shifts that create ultra-smooth gradients and depth.
-- 🚀 **Developer-First Data:** Ready-to-use structured JSON/CSV data optimized for fast queries.
-- 🎮 **Versatile:** Perfect for procedural graphics, game engines (Unity/Unreal), web apps, and AI color pipelines.
+- **Micro-Nuanced Variations:** Tiny HEX-level shifts that create ultra-smooth gradients and depth.
+- **Developer-First Data:** Ready-to-use structured JSON/CSV data optimized for fast queries.
+- **Versatile:** Perfect for procedural graphics, game engines (Unity/Unreal), web apps, and AI color pipelines.
 
 ---
 
-## 📊 Dataset Preview
+##  Dataset Preview
 
 | HEX Code | RGB | Sample Concept |
 | :--- | :--- | :--- |
@@ -30,11 +30,11 @@
 
 ---
 
-## 📄 License & Sharing
+##  License & Sharing
 
 Under the **MIT License**, you can share these 50,000 colors on any platform of your choice simply by using my GitHub username (`kocatepedemir`) or project link.
 
-### 💳 Attribution Template
+###  Attribution Template
 
 ```json
 // Color dataset provided by kocatepedemir
