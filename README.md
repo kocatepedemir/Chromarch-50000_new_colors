@@ -13,7 +13,7 @@
 ## Why Chromarch?
 
 - **Micro-Nuanced Variations:** Tiny HEX-level shifts that create ultra-smooth gradients and depth.
-- **Developer-First Data:** Ready-to-use structured JSON/CSV data optimized for fast queries.
+- **Developer-First Data:** Ready-to-use structured Database data optimized for fast queries.
 - **Versatile:** Perfect for procedural graphics, game engines (Unity/Unreal), web apps, and AI color pipelines.
 
 ---
