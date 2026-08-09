@@ -1,253 +1,29 @@
+import os
 import sqlite3
+import uuid
 
-try:
-    import tkinter as tk
-    from tkinter import ttk, messagebox, filedialog
-except ImportError:
-    # tkinter is unavailable in browser (Pyodide) environments. The pure
-    # data/logic methods on ColorApp (e.g. parse_row_data) do not depend on
-    # tkinter and can still be imported and called from there.
-    tk = None
+from flask import Flask, request, jsonify, session, Response
 
-DB_NAME = "github_new_colors.db"
 ITEMS_PER_PAGE = 24
-PLACEHOLDER_TEXT = "Search colors, HEX, RGB..."
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+
+# sid -> path to that session's uploaded db file
+SESSION_DBS = {}
+
 
 class ColorApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("GitHub New Colors Explorer (50k Dataset)")
-        self.root.geometry("950x680")
-        self.root.configure(bg="#0d1117")
+    """Holds the row-parsing logic. Pure data logic, no GUI/tkinter
+    dependency, so it works the same whether called from a desktop
+    tkinter app or from this Flask server."""
 
-        self.tables = []
-        self.selected_table = ""
-        self.current_page = 1
-        self.total_items = 0
-        self.total_pages = 1
-        self.db_path = DB_NAME
-
-        self.setup_ui()
-
-    def setup_ui(self):
-        top_frame = tk.Frame(self.root, bg="#161b22", pady=12, padx=15)
-        top_frame.pack(fill=tk.X, side=tk.TOP)
-
-        title = tk.Label(
-            top_frame, 
-            text="GitHub New Colors Explorer", 
-            font=("Segoe UI", 15, "bold"), 
-            fg="#58a6ff", 
-            bg="#161b22"
-        )
-        title.pack(side=tk.LEFT, padx=5)
-
-        load_btn = tk.Button(
-            top_frame, 
-            text="Load Database", 
-            command=self.load_database,
-            bg="#238636", 
-            fg="white", 
-            font=("Segoe UI", 10, "bold"),
-            bd=0, 
-            padx=12, 
-            pady=5,
-            cursor="hand2"
-        )
-        load_btn.pack(side=tk.RIGHT, padx=5)
-
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self.on_search_change)
-        self.search_entry = tk.Entry(
-            top_frame, 
-            textvariable=self.search_var, 
-            font=("Segoe UI", 10),
-            bg="#010409", 
-            fg="#c9d1d9", 
-            insertbackground="white",
-            bd=1, 
-            relief=tk.SOLID
-        )
-        self.search_entry.pack(side=tk.RIGHT, padx=10, ipady=3)
-        self.search_entry.insert(0, PLACEHOLDER_TEXT)
-        self.search_entry.bind("<FocusIn>", self.on_search_focus_in)
-        self.search_entry.bind("<FocusOut>", self.on_search_focus_out)
-
-        self.nav_frame = tk.Frame(self.root, bg="#161b22", pady=8, padx=15)
-        self.nav_frame.pack(fill=tk.X, side=tk.BOTTOM)
-
-        self.prev_btn = tk.Button(
-            self.nav_frame, 
-            text="◄ Previous", 
-            command=self.prev_page,
-            bg="#21262d", 
-            fg="#c9d1d9", 
-            state=tk.DISABLED,
-            bd=0, 
-            padx=10, 
-            pady=4,
-            cursor="hand2"
-        )
-        self.prev_btn.pack(side=tk.LEFT)
-
-        self.page_label = tk.Label(
-            self.nav_frame, 
-            text="Page 0 of 0", 
-            font=("Segoe UI", 10), 
-            fg="#8b949e", 
-            bg="#161b22"
-        )
-        self.page_label.pack(side=tk.LEFT, expand=True)
-
-        self.next_btn = tk.Button(
-            self.nav_frame, 
-            text="Next ►", 
-            command=self.next_page,
-            bg="#21262d", 
-            fg="#c9d1d9", 
-            state=tk.DISABLED,
-            bd=0, 
-            padx=10, 
-            pady=4,
-            cursor="hand2"
-        )
-        self.next_btn.pack(side=tk.RIGHT)
-
-        main_container = tk.Frame(self.root, bg="#0d1117")
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        self.canvas = tk.Canvas(main_container, bg="#0d1117", highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=self.canvas.yview)
-        
-        self.scroll_frame = tk.Frame(self.canvas, bg="#0d1117")
-        self.scroll_window = self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
-        
-        self.scroll_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self.scroll_window, width=e.width))
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self.status_label = tk.Label(
-            self.scroll_frame, 
-            text="Click 'Load Database' to view 50k color dataset.", 
-            font=("Segoe UI", 12), 
-            fg="#8b949e", 
-            bg="#0d1117"
-        )
-        self.status_label.pack(pady=50)
-
-    def on_search_focus_in(self, event):
-        if self.search_entry.get() == PLACEHOLDER_TEXT:
-            self.search_entry.delete(0, tk.END)
-
-    def on_search_focus_out(self, event):
-        if not self.search_entry.get().strip():
-            self.search_entry.insert(0, PLACEHOLDER_TEXT)
-
-    def load_database(self):
-        path = filedialog.askopenfilename(
-            title="Select GitHub Colors Database",
-            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")]
-        )
-        if not path:
-            return
-
-        try:
-            conn = sqlite3.connect(path)
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
-
-            if not tables:
-                messagebox.showinfo("Info", "Database is empty or has no tables.")
-                conn.close()
-                return
-
-            self.tables = [t[0] for t in tables]
-            self.selected_table = self.tables[0]
-            self.db_path = path
-            conn.close()
-
-            self.current_page = 1
-            self.fetch_and_render()
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to read database:\n{str(e)}")
-
-    def fetch_and_render(self):
-        if not self.selected_table:
-            return
-
-        query_text = self.search_var.get().strip()
-        if query_text == PLACEHOLDER_TEXT:
-            query_text = ""
-
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-
-            cursor.execute(f"PRAGMA table_info(`{self.selected_table}`)")
-            columns = [col[1] for col in cursor.fetchall()]
-
-            where_clause = ""
-            params = []
-            if query_text:
-                conditions = [f"`{col}` LIKE ?" for col in columns]
-                where_clause = " WHERE " + " OR ".join(conditions)
-                params = [f"%{query_text}%"] * len(columns)
-
-            count_sql = f"SELECT COUNT(*) FROM `{self.selected_table}`{where_clause}"
-            cursor.execute(count_sql, params)
-            self.total_items = cursor.fetchone()[0]
-
-            self.total_pages = max(1, (self.total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
-
-            offset = (self.current_page - 1) * ITEMS_PER_PAGE
-            data_sql = f"SELECT * FROM `{self.selected_table}`{where_clause} LIMIT {ITEMS_PER_PAGE} OFFSET {offset}"
-            cursor.execute(data_sql, params)
-            rows = cursor.fetchall()
-
-            conn.close()
-
-            self.render_cards(columns, rows)
-            self.update_pagination_controls()
-
-        except Exception as e:
-            messagebox.showerror("Database Error", f"Failed to query database:\n{str(e)}")
-
-    def render_cards(self, columns, rows):
-        for widget in self.scroll_frame.winfo_children():
-            widget.destroy()
-
-        self.canvas.yview_moveto(0)
-
-        if not rows:
-            no_data = tk.Label(
-                self.scroll_frame, 
-                text="No matching colors found.", 
-                font=("Segoe UI", 12), 
-                fg="#8b949e", 
-                bg="#0d1117"
-            )
-            no_data.pack(pady=50)
-            return
-
-        grid_frame = tk.Frame(self.scroll_frame, bg="#0d1117")
-        grid_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        col_count = 3
-        for i in range(col_count):
-            grid_frame.columnconfigure(i, weight=1)
-
-        for i, row in enumerate(rows):
-            name, hex_val, rgb_val, extra = self.parse_row_data(columns, row)
-            r, c = divmod(i, col_count)
-            self.create_card(grid_frame, r, c, name, hex_val, rgb_val, extra)
-
-    def parse_row_data(self, columns, row):
+    @staticmethod
+    def parse_row_data(columns, row):
         name = "Color Item"
         hex_val = ""
         rgb_val = ""
@@ -271,100 +47,354 @@ class ColorApp:
 
         return name, hex_val, rgb_val, "\n".join(extra[:3])
 
-    def create_card(self, parent, row, col, name, hex_code, rgb_code, extra_info):
-        card = tk.Frame(parent, bg="#161b22", bd=1, relief=tk.SOLID)
-        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
 
-        bg_color = hex_code if hex_code and len(hex_code) in (4, 7) else "#21262d"
-        preview = tk.Frame(card, bg=bg_color, height=55)
-        preview.pack(fill=tk.X)
+def get_session_id():
+    if "sid" not in session:
+        session["sid"] = str(uuid.uuid4())
+    return session["sid"]
 
-        details = tk.Frame(card, bg="#161b22", padx=10, pady=8)
-        details.pack(fill=tk.BOTH, expand=True)
 
-        lbl_title = tk.Label(
-            details, 
-            text=name, 
-            font=("Segoe UI", 10, "bold"), 
-            fg="#f0f6fc", 
-            bg="#161b22", 
-            anchor="w",
-            wraplength=220,
-            justify=tk.LEFT
+def get_db_path():
+    sid = get_session_id()
+    return SESSION_DBS.get(sid)
+
+
+# --------------------------------------------------------------------------
+# Embedded frontend (HTML + CSS + JS in one string, no separate files)
+# --------------------------------------------------------------------------
+PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GitHub New Colors Explorer (50k Dataset)</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --border: #21262d;
+  --text: #c9d1d9; --text-bright: #f0f6fc; --text-dim: #8b949e;
+  --accent: #58a6ff; --accent2: #79c0ff; --green: #238636; --input-bg: #010409;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  height: 100vh; display: flex; flex-direction: column;
+}
+#top-frame { background: var(--panel); padding: 12px 15px; display: flex; align-items: center; gap: 10px; }
+#title { color: var(--accent); font-size: 15px; font-weight: bold; margin-right: auto; }
+#search-entry {
+  background: var(--input-bg); color: var(--text); border: 1px solid #30363d;
+  padding: 6px 8px; font-size: 10pt; width: 260px; border-radius: 3px;
+}
+#search-entry:focus { outline: none; border-color: var(--accent); }
+#load-btn {
+  background: var(--green); color: white; font-weight: bold; font-size: 10pt;
+  border: 0; padding: 6px 12px; border-radius: 4px; cursor: pointer;
+}
+#load-btn:disabled { opacity: 0.6; cursor: default; }
+#load-btn:not(:disabled):hover { filter: brightness(1.1); }
+#file-input { display: none; }
+#main-container { flex: 1; overflow-y: auto; padding: 10px; }
+#status-label { text-align: center; color: var(--text-dim); font-size: 12pt; padding: 50px 0; white-space: pre-line; }
+#grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 10px; }
+@media (max-width: 800px) { #grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 500px) { #grid { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; display: flex; flex-direction: column; }
+.card-preview { height: 55px; }
+.card-details { padding: 8px 10px; }
+.card-title { color: var(--text-bright); font-weight: bold; font-size: 10pt; margin-bottom: 4px; word-break: break-word; }
+.card-btn {
+  display: block; width: 100%; background: var(--input-bg); border: 0; text-align: left;
+  padding: 4px 6px; margin: 2px 0; font-family: Consolas, monospace; font-size: 9pt;
+  cursor: pointer; border-radius: 3px;
+}
+.card-btn.hex { color: var(--accent); font-weight: bold; }
+.card-btn.rgb { color: var(--accent2); font-size: 8pt; }
+.card-extra { color: var(--text-dim); font-size: 8pt; margin-top: 4px; white-space: pre-line; }
+#nav-frame { background: var(--panel); padding: 8px 15px; display: flex; align-items: center; }
+#nav-frame button { background: var(--border); color: var(--text); border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+#nav-frame button:disabled { opacity: 0.5; cursor: default; }
+#page-label { flex: 1; text-align: center; color: var(--text-dim); font-size: 10pt; }
+</style>
+</head>
+<body>
+
+  <div id="top-frame">
+    <div id="title">GitHub New Colors Explorer</div>
+    <input id="search-entry" type="text" value="Search colors, HEX, RGB...">
+    <button id="load-btn">Load Database</button>
+    <input id="file-input" type="file" accept=".db,.sqlite,.sqlite3">
+  </div>
+
+  <div id="main-container">
+    <div id="status-label">Click 'Load Database' to view 50k color dataset.</div>
+    <div id="grid" style="display:none;"></div>
+  </div>
+
+  <div id="nav-frame">
+    <button id="prev-btn" disabled>&#9668; Previous</button>
+    <div id="page-label">Page 0 of 0</div>
+    <button id="next-btn" disabled>Next &#9658;</button>
+  </div>
+
+<script>
+const ITEMS_PER_PAGE = 24;
+const PLACEHOLDER_TEXT = "Search colors, HEX, RGB...";
+
+let selectedTable = "";
+let currentPage = 1;
+let totalItems = 0;
+let totalPages = 1;
+let dbLoaded = false;
+
+const searchEntry = document.getElementById("search-entry");
+const loadBtn = document.getElementById("load-btn");
+const fileInput = document.getElementById("file-input");
+const statusLabel = document.getElementById("status-label");
+const grid = document.getElementById("grid");
+const prevBtn = document.getElementById("prev-btn");
+const nextBtn = document.getElementById("next-btn");
+const pageLabel = document.getElementById("page-label");
+
+searchEntry.addEventListener("focus", () => {
+  if (searchEntry.value === PLACEHOLDER_TEXT) searchEntry.value = "";
+});
+searchEntry.addEventListener("blur", () => {
+  if (!searchEntry.value.trim()) searchEntry.value = PLACEHOLDER_TEXT;
+});
+searchEntry.addEventListener("input", () => {
+  if (dbLoaded) { currentPage = 1; fetchAndRender(); }
+});
+
+loadBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  await loadDatabase(file);
+});
+
+prevBtn.addEventListener("click", () => { if (currentPage > 1) { currentPage--; fetchAndRender(); } });
+nextBtn.addEventListener("click", () => { if (currentPage < totalPages) { currentPage++; fetchAndRender(); } });
+
+async function loadDatabase(file) {
+  loadBtn.disabled = true;
+  loadBtn.textContent = "Loading...";
+  try {
+    const formData = new FormData();
+    formData.append("db_file", file);
+    const res = await fetch("/api/upload", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || "Failed to read database."); return; }
+    selectedTable = data.tables[0];
+    dbLoaded = true;
+    currentPage = 1;
+    fetchAndRender();
+  } catch (err) {
+    alert("Failed to read database:\\n" + err.message);
+  } finally {
+    loadBtn.disabled = false;
+    loadBtn.textContent = "Load Database";
+  }
+}
+
+async function fetchAndRender() {
+  if (!selectedTable) return;
+  let queryText = searchEntry.value.trim();
+  if (queryText === PLACEHOLDER_TEXT) queryText = "";
+  try {
+    const params = new URLSearchParams({ table: selectedTable, q: queryText, page: currentPage });
+    const res = await fetch(`/api/query?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || "Failed to query database."); return; }
+    totalItems = data.total_items;
+    totalPages = data.total_pages;
+    renderCards(data.cards);
+    updatePaginationControls();
+  } catch (err) {
+    alert("Failed to query database:\\n" + err.message);
+  }
+}
+
+function renderCards(cards) {
+  grid.innerHTML = "";
+  if (!cards.length) {
+    statusLabel.textContent = "No matching colors found.";
+    statusLabel.style.display = "block";
+    grid.style.display = "none";
+    return;
+  }
+  statusLabel.style.display = "none";
+  grid.style.display = "grid";
+  cards.forEach(c => grid.appendChild(createCard(c.name, c.hex, c.rgb, c.extra)));
+  document.getElementById("main-container").scrollTop = 0;
+}
+
+function createCard(name, hexCode, rgbCode, extraInfo) {
+  const card = document.createElement("div");
+  card.className = "card";
+
+  const preview = document.createElement("div");
+  preview.className = "card-preview";
+  preview.style.background = (hexCode && (hexCode.length === 4 || hexCode.length === 7)) ? hexCode : "#21262d";
+  card.appendChild(preview);
+
+  const details = document.createElement("div");
+  details.className = "card-details";
+
+  const title = document.createElement("div");
+  title.className = "card-title";
+  title.textContent = name;
+  details.appendChild(title);
+
+  if (hexCode) {
+    const btnHex = document.createElement("button");
+    btnHex.className = "card-btn hex";
+    btnHex.textContent = `HEX: ${hexCode}`;
+    btnHex.addEventListener("click", () => copyToClipboard(hexCode));
+    details.appendChild(btnHex);
+  }
+
+  if (rgbCode) {
+    const btnRgb = document.createElement("button");
+    btnRgb.className = "card-btn rgb";
+    btnRgb.textContent = `RGB: ${rgbCode}`;
+    btnRgb.addEventListener("click", () => copyToClipboard(rgbCode));
+    details.appendChild(btnRgb);
+  }
+
+  if (extraInfo) {
+    const extra = document.createElement("div");
+    extra.className = "card-extra";
+    extra.textContent = extraInfo;
+    details.appendChild(extra);
+  }
+
+  card.appendChild(details);
+  return card;
+}
+
+function updatePaginationControls() {
+  if (totalItems === 0) {
+    pageLabel.textContent = "No results found";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  pageLabel.textContent = `Page ${currentPage} of ${totalPages.toLocaleString()} (${totalItems.toLocaleString()} colors)`;
+  prevBtn.disabled = currentPage <= 1;
+  nextBtn.disabled = currentPage >= totalPages;
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    alert(`Copied to clipboard: ${text}`);
+  }).catch(() => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    alert(`Copied to clipboard: ${text}`);
+  });
+}
+</script>
+</body>
+</html>
+"""
+
+
+# --------------------------------------------------------------------------
+# Routes
+# --------------------------------------------------------------------------
+@app.route("/")
+def index():
+    return Response(PAGE_HTML, mimetype="text/html")
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload():
+    if "db_file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["db_file"]
+    if not file.filename:
+        return jsonify({"error": "No file selected"}), 400
+
+    sid = get_session_id()
+    dest_path = os.path.join(UPLOAD_DIR, f"{sid}.db")
+    file.save(dest_path)
+    SESSION_DBS[sid] = dest_path
+
+    try:
+        conn = sqlite3.connect(dest_path)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cur.fetchall()]
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": f"Failed to read database: {e}"}), 400
+
+    if not tables:
+        return jsonify({"error": "Database is empty or has no tables."}), 400
+
+    return jsonify({"tables": tables})
+
+
+@app.route("/api/query")
+def query():
+    db_path = get_db_path()
+    if not db_path or not os.path.exists(db_path):
+        return jsonify({"error": "No database loaded yet."}), 400
+
+    table = request.args.get("table", "")
+    query_text = request.args.get("q", "").strip()
+    page = max(1, int(request.args.get("page", 1)))
+
+    if not table:
+        return jsonify({"error": "No table specified."}), 400
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+
+        cur.execute(f"PRAGMA table_info(`{table}`)")
+        columns = [c[1] for c in cur.fetchall()]
+
+        where_clause = ""
+        params = []
+        if query_text:
+            conditions = [f"`{c}` LIKE ?" for c in columns]
+            where_clause = " WHERE " + " OR ".join(conditions)
+            params = [f"%{query_text}%"] * len(columns)
+
+        cur.execute(f"SELECT COUNT(*) FROM `{table}`{where_clause}", params)
+        total_items = cur.fetchone()[0]
+
+        offset = (page - 1) * ITEMS_PER_PAGE
+        cur.execute(
+            f"SELECT * FROM `{table}`{where_clause} LIMIT {ITEMS_PER_PAGE} OFFSET {offset}",
+            params,
         )
-        lbl_title.pack(fill=tk.X)
+        rows = cur.fetchall()
+        conn.close()
 
-        if hex_code:
-            btn_hex = tk.Button(
-                details, 
-                text=f"HEX: {hex_code}", 
-                font=("Consolas", 9, "bold"), 
-                fg="#58a6ff", 
-                bg="#010409", 
-                bd=0,
-                cursor="hand2",
-                command=lambda: self.copy_to_clipboard(hex_code)
-            )
-            btn_hex.pack(fill=tk.X, pady=2)
+        cards = []
+        for row in rows:
+            name, hex_val, rgb_val, extra = ColorApp.parse_row_data(columns, row)
+            cards.append({"name": name, "hex": hex_val, "rgb": rgb_val, "extra": extra})
 
-        if rgb_code:
-            btn_rgb = tk.Button(
-                details, 
-                text=f"RGB: {rgb_code}", 
-                font=("Consolas", 8), 
-                fg="#79c0ff", 
-                bg="#010409", 
-                bd=0,
-                cursor="hand2",
-                command=lambda: self.copy_to_clipboard(rgb_code)
-            )
-            btn_rgb.pack(fill=tk.X, pady=2)
+        total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
 
-        if extra_info:
-            lbl_extra = tk.Label(
-                details, 
-                text=extra_info, 
-                font=("Segoe UI", 8), 
-                fg="#8b949e", 
-                bg="#161b22", 
-                anchor="w",
-                justify=tk.LEFT,
-                wraplength=220
-            )
-            lbl_extra.pack(fill=tk.X, pady=(2, 0))
+        return jsonify({
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "page": page,
+            "cards": cards,
+        })
 
-    def update_pagination_controls(self):
-        if self.total_items == 0:
-            self.page_label.config(text="No results found")
-            self.prev_btn.config(state=tk.DISABLED)
-            self.next_btn.config(state=tk.DISABLED)
-            return
+    except Exception as e:
+        return jsonify({"error": f"Failed to query database: {e}"}), 400
 
-        self.page_label.config(text=f"Page {self.current_page} of {self.total_pages:,} ({self.total_items:,} colors)")
-        self.prev_btn.config(state=tk.NORMAL if self.current_page > 1 else tk.DISABLED)
-        self.next_btn.config(state=tk.NORMAL if self.current_page < self.total_pages else tk.DISABLED)
-
-    def prev_page(self):
-        if self.current_page > 1:
-            self.current_page -= 1
-            self.fetch_and_render()
-
-    def next_page(self):
-        if self.current_page < self.total_pages:
-            self.current_page += 1
-            self.fetch_and_render()
-
-    def copy_to_clipboard(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        messagebox.showinfo("Copied", f"Copied to clipboard: {text}")
-
-    def on_search_change(self, *args):
-        if self.selected_table:
-            self.current_page = 1
-            self.fetch_and_render()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = ColorApp(root)
-    root.mainloop()
+    app.run(host="127.0.0.1", port=5000, debug=True)
