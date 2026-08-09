@@ -1,6 +1,13 @@
 import sqlite3
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox, filedialog
+except ImportError:
+    # tkinter is unavailable in browser (Pyodide) environments. The pure
+    # data/logic methods on ColorApp (e.g. parse_row_data) do not depend on
+    # tkinter and can still be imported and called from there.
+    tk = None
 
 DB_NAME = "github_new_colors.db"
 ITEMS_PER_PAGE = 24
